@@ -27,89 +27,140 @@ def main():
     schema_path = os.path.join(PROJECT_ROOT, 'database', 'schema.sql')
     db = DBManager(DB_PATH, schema_path)
     
-    # Clear existing data for fresh run
-    db.execute_query("DELETE FROM cops")
-    db.execute_query("DELETE FROM bribe_history")
-    db.execute_query("DELETE FROM investigations")
-    db.execute_query("DELETE FROM orders")
-    db.execute_query("DELETE FROM episode_stats")
-
-    # 2. Create Agents
-    agents_map = {} # id -> agent_obj
-    
-    print("Creating Leadership:")
-    # Chief
-    chief = PoliceChief(0)
-    agents_map[0] = chief
-    db.execute_query(
-        "INSERT INTO cops (cop_id, name, cop_type, rank, personality) VALUES (?, ?, ?, ?, ?)",
-        (0, chief.name, chief.cop_type, chief.rank, "strict")
-    )
-    print(f"👑 Created {chief}")
-
-    # IA
-    ia = IADetective(1)
-    agents_map[1] = ia
-    db.execute_query(
-        "INSERT INTO cops (cop_id, name, cop_type, rank, personality) VALUES (?, ?, ?, ?, ?)",
-        (1, ia.name, ia.cop_type, ia.rank, "analytical")
-    )
-    print(f"🕵️ Created {ia}")
-
-    print("\nCreating Corrupt Officers:")
-    personalities = ['greedy', 'cautious', 'paranoid']
-    corrupt_ids = []
-    
-    for i in range(NUM_CORRUPT_COPS):
-        cid = 2 + i
-        p_type = personalities[i % len(personalities)]
-        c_score = random.uniform(INITIAL_CORRUPTION_MIN, INITIAL_CORRUPTION_MAX)
-        
-        agent = CorruptCop(cid, f"Officer_{cid}", p_type, c_score)
-        agents_map[cid] = agent
-        corrupt_ids.append(cid)
-        
-        db.execute_query(
-            "INSERT INTO cops (cop_id, name, cop_type, rank, personality, corruption_score) VALUES (?, ?, ?, ?, ?, ?)",
-            (cid, agent.name, agent.cop_type, agent.rank, agent.personality, agent.corruption_score)
-        )
-        print(f"Created {agent}")
-
-    print("\nCreating Honest Officers:")
-    honest_ids = []
-    for i in range(NUM_HONEST_COPS):
-        hid = 2 + NUM_CORRUPT_COPS + i
-        # honest integrity
-        i_score = random.uniform(INITIAL_INTEGRITY_HONEST-5, INITIAL_INTEGRITY_HONEST+5)
-        
-        agent = HonestCop(hid, f"Officer_{hid}", i_score)
-        agents_map[hid] = agent
-        honest_ids.append(hid)
-        
-        db.execute_query(
-            "INSERT INTO cops (cop_id, name, cop_type, rank, personality, loyalty_score) VALUES (?, ?, ?, ?, ?, ?)",
-            (hid, agent.name, agent.cop_type, agent.rank, agent.personality, agent.integrity_score)
-        )
-        print(f"Created {agent}")
-
-    print(f"\n✓ World initialized: {len(agents_map)} agents total")
-    print(f"Starting Simulation: {NUM_EPISODES} episodes...\n")
-
     # Load Global Training Stats
     state_file = os.path.join(PROJECT_ROOT, 'training_state.json')
-    global_episodes = 0
+    start_episode = 0
+    
     if os.path.exists(state_file):
         try:
             with open(state_file, 'r') as f:
-                global_episodes = json.load(f).get('total_episodes', 0)
+                data = json.load(f)
+                start_episode = data.get('total_episodes', 0)
+                print(f"🔄 RESUMING simulation from Episode {start_episode}...")
         except:
-            pass
+            print("⚠️ Error loading state file. Starting fresh.")
+            start_episode = 0
+
+
+    
+    agents_map = {} # id -> agent_obj
+    corrupt_ids = []
+    honest_ids = []
+    
+    # Define personality types for use in creation and respawn
+    personalities = ['greedy', 'cautious', 'paranoid']
+    chief = None
+    ia = None
+
+    if start_episode > 0:
+        # === RESUME MODE ===
+        print("📥 Loading Agents from Database...")
+        # Fetch active cops
+        rows = db.fetch_all("SELECT cop_id, name, cop_type, rank, personality, corruption_score, loyalty_score, times_bribed, times_caught, total_money_earned FROM cops WHERE status='active'")
+        
+        for row in rows:
+            cid, name, c_type, rank, pers, c_score, l_score, t_bribed, t_caught, money = row
+            
+            if c_type == 'chief':
+                agent = PoliceChief(cid)
+                agents_map[cid] = agent
+                chief = agent # Capture for main loop usage
+            elif c_type == 'detective':
+                agent = IADetective(cid)
+                agents_map[cid] = agent
+                ia = agent # Capture for main loop usage
+            elif c_type == 'corrupt':
+                agent = CorruptCop(cid, name, pers, c_score)
+                # Restore Stats
+                agent.loyalty_score = l_score
+                agent.times_bribed = t_bribed
+                agent.times_caught = t_caught
+                agent.total_money_earned = money
+                agents_map[cid] = agent
+                corrupt_ids.append(cid)
+            elif c_type == 'honest':
+                agent = HonestCop(cid, name, l_score) # Init with integrity/loyalty
+                agent.times_bribed = t_bribed
+                agent.times_caught = t_caught
+                agent.total_money_earned = money
+                agents_map[cid] = agent
+                honest_ids.append(cid)
+        
+        print(f"✅ Loaded {len(agents_map)} Active Agents.")
+        
+    else:
+        # === FRESH START MODE ===
+        print("✨ Starting FRESH Simulation (Clearing DB)...")
+        db.execute_query("DELETE FROM cops")
+        db.execute_query("DELETE FROM bribe_history")
+        db.execute_query("DELETE FROM investigations")
+        db.execute_query("DELETE FROM orders")
+        db.execute_query("DELETE FROM episode_stats")
+
+        # 2. Create Agents
+        print("Creating Leadership:")
+        # Chief
+        chief = PoliceChief(0)
+        agents_map[0] = chief
+        db.execute_query(
+            "INSERT INTO cops (cop_id, name, cop_type, rank, personality) VALUES (?, ?, ?, ?, ?)",
+            (0, chief.name, chief.cop_type, chief.rank, "strict")
+        )
+
+        # IA
+        ia = IADetective(1)
+        agents_map[1] = ia
+        db.execute_query(
+            "INSERT INTO cops (cop_id, name, cop_type, rank, personality) VALUES (?, ?, ?, ?, ?)",
+            (1, ia.name, ia.cop_type, ia.rank, "analytical")
+        )
+
+        print("\nCreating Corrupt Officers:")
+        # personalities defined above
+        
+        for i in range(NUM_CORRUPT_COPS):
+            cid = 2 + i
+            p_type = personalities[i % len(personalities)]
+            c_score = random.uniform(INITIAL_CORRUPTION_MIN, INITIAL_CORRUPTION_MAX)
+            
+            agent = CorruptCop(cid, f"Officer_{cid}", p_type, c_score)
+            agents_map[cid] = agent
+            corrupt_ids.append(cid)
+            
+            db.execute_query(
+                "INSERT INTO cops (cop_id, name, cop_type, rank, personality, corruption_score) VALUES (?, ?, ?, ?, ?, ?)",
+                (cid, agent.name, agent.cop_type, agent.rank, agent.personality, agent.corruption_score)
+            )
+
+        print("\nCreating Honest Officers:")
+        for i in range(NUM_HONEST_COPS):
+            hid = 2 + NUM_CORRUPT_COPS + i
+            i_score = random.uniform(INITIAL_INTEGRITY_HONEST-5, INITIAL_INTEGRITY_HONEST+5)
+            
+            agent = HonestCop(hid, f"Officer_{hid}", i_score)
+            agents_map[hid] = agent
+            honest_ids.append(hid)
+            
+            db.execute_query(
+                "INSERT INTO cops (cop_id, name, cop_type, rank, personality, loyalty_score) VALUES (?, ?, ?, ?, ?, ?)",
+                (hid, agent.name, agent.cop_type, agent.rank, agent.personality, agent.integrity_score)
+            )
+
+        print(f"\n✓ World initialized: {len(agents_map)} agents total")
+
+    print(f"Starting/Resuming Simulation: {NUM_EPISODES} episodes (Target: {start_episode + NUM_EPISODES})...\n")
+    
+    global_episodes = start_episode
+
+
 
     # 3. Run Simulation
     env = GameWorld()
     
     # Global Alert State
     global_alert_level = 0.0
+    
+    target_episode = start_episode + NUM_EPISODES
 
     for episode in range(1, NUM_EPISODES + 1):
         current_global_ep = global_episodes + episode
@@ -177,7 +228,7 @@ def main():
                 
                 # 1. Save the Dead Brain
                 cop_agent.save_brain()
-                dead_brain_path = os.path.join(BRAIN_DIR, f"cop_{active_cop_id}.pkl")
+                dead_brain_path = os.path.join(BRAIN_DIR, f"cop_{active_cop_id}.pth")
                 
                 # 2. Recruitment
                 next_cop_id = max(agents_map.keys()) + 1
@@ -238,9 +289,12 @@ def main():
         if outcome == 'caught':
             print(f"🚨 {cop_agent.name} caught! (Ep {current_global_ep})")
 
+        if episode % 50 == 0:
+            print(f"Episode {current_global_ep}/{target_episode} (Total Lifetime: {current_global_ep})...")
+
         # 4. Chief Inspection
-        if episode % INSPECTION_FREQUENCY == 0:
-            print(f"Episode {episode}/{NUM_EPISODES} (Total Lifetime: {current_global_ep})...")
+        if episode > 0 and episode % INSPECTION_FREQUENCY == 0:
+            print(f"Episode {episode} Inspection...")
             
             # Fetch current stats
             cop_rows = db.fetch_all("SELECT cop_id, rank, corruption_score, times_bribed, times_caught, total_money_earned FROM cops WHERE status != 'killed'")
@@ -255,9 +309,9 @@ def main():
                      'total_money_earned': row[5]
                  })
 
-            orders = chief.monitor_subordinates(cop_data)
+            inspection_orders = chief.monitor_subordinates(cop_data)
             
-            for order in orders:
+            for order in inspection_orders:
                 target_id = order['target_cop_id']
                 if target_id not in agents_map: continue 
 
