@@ -39,7 +39,7 @@ class CorruptCop:
         self.output_dim = 3 # ACCEPT, REJECT, CLEAN_AND_ACCEPT
         
         # Device Check
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cpu")
         
         self.policy_net = DQN(self.input_dim, self.output_dim, HIDDEN_DIM).to(self.device)
         self.target_net = DQN(self.input_dim, self.output_dim, HIDDEN_DIM).to(self.device)
@@ -119,7 +119,9 @@ class CorruptCop:
 
         # Compute a mask of non-final states
         non_final_mask = torch.tensor(tuple(map(lambda s: s is not None, batch.next_state)), device=self.device, dtype=torch.bool)
-        non_final_next_states = torch.stack([s for s in batch.next_state if s is not None])
+        
+        valid_next_states = [s for s in batch.next_state if s is not None]
+        non_final_next_states = torch.stack(valid_next_states) if len(valid_next_states) > 0 else None
         
         state_batch = torch.stack(batch.state)
         action_batch = torch.cat(batch.action)
@@ -130,10 +132,11 @@ class CorruptCop:
 
         # Compute V(s_{t+1}) for all next states.
         next_state_values = torch.zeros(BATCH_SIZE, device=self.device)
-        if len(non_final_next_states) > 0:
+        
+        if non_final_next_states is not None:
             next_state_values[non_final_mask] = self.target_net(non_final_next_states).max(1)[0].detach()
-        else:
-            next_state_values = torch.zeros(BATCH_SIZE, device=self.device)
+        # Else: all are terminal, values stay 0
+            
         # Compute the expected Q values
         expected_state_action_values = (next_state_values * GAMMA) + reward_batch
 

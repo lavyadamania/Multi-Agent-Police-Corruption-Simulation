@@ -12,7 +12,7 @@ TOTAL_AGENTS = 1 + 1 + NUM_CORRUPT_COPS + NUM_HONEST_COPS  # Chief + IA + Corrup
 
 # Simulation Parameters
 # TRAINING: Increase to 3000+ for visible Q-Learning convergence
-NUM_EPISODES = 3000
+NUM_EPISODES = 10000
 INSPECTION_FREQUENCY = 50
 
 # Risk Factors
